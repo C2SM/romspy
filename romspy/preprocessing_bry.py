@@ -17,10 +17,11 @@ License: GNU GPL2+
 
 
 class PreProcessorBry:
-    def __init__(self, outfile: str, clim_files: list, title: str, grd_file: str, 
+    def __init__(self, clim_files: list, title: str, grd_file: str, 
                  **kwargs):
         """
         Contains universal methods for generating lateral boundary conditions (bry files)
+        from a set of clim files
 
         :param clim_files: list of paths to clim files to be used for the bry files
         :param verbose: whether text should be printed as the program is running
@@ -40,12 +41,12 @@ class PreProcessorBry:
             verbose - whether to print runtime information - default false
         """
         self.verbose = kwargs.get('verbose', False)
-        if self.verbose:
-            print()
-            print('\033[1;32m=================================\033[0m')
-            print('\033[1;32mLateral boundary conditions (bry)\033[0m')
-            print('\033[1;32m=================================\033[0m')
-            print()
+        #if self.verbose:
+        print()
+        print('\033[1;32m=================================\033[0m')
+        print('\033[1;32mLateral boundary conditions (bry)\033[0m')
+        print('\033[1;32m=================================\033[0m')
+        print()
         # cdo
         self.cdo = cdo.Cdo(debug=kwargs.get('verbose', False))
         test_cdo(self.cdo)
@@ -72,11 +73,11 @@ class PreProcessorBry:
         self.file_type, self.processes = kwargs.get('file_type', 'nc4c'), kwargs.get('processes', 8)
         # Other Options
         self._adjustments = None
-        self.outfile = outfile
         self.cycle_length = kwargs.get('cycle_length', 365.25)
         self.bry_time = kwargs.get('bry_time', [ 15+i*30 for i in range(12)])
         self.obc = kwargs.get('obc', [0, 0, 0, 0])
-        # List of variables:
+        # List of variables: each entry is a list specifying variable name, type of horizontal grid,
+        # unit and dimensions
         self.var_list = [ 
             [ 'temp','rho','potential temperature','Celsius','tzyx' ],
             [ 'salt','rho','salinity','PSU','tzyx' ],
@@ -128,15 +129,36 @@ class PreProcessorBry:
             print("Please set your adjustments first!")
             return
 
-        # Loop over clim files and generate corresponding initial conditions:
+        # Loop over clim files and generate corresponding lateral boundary conditions:
         fcnt = 1
         for fclm in self.clim_files:
+            #print("fclm = "+fclm)
             if not os.path.exists(fclm):
                 print("File not found and skipped: "+fclm)
             # Get sizes of dimensions in fclm:
             nc_clm = netCDF4.Dataset(fclm,'r')
-            nt = len(nc_clm.dimensions['time'])
-            nz = len(nc_clm.dimensions['s_rho'])
+            if "time" in nc_clm.dimensions:
+                nt = len(nc_clm.dimensions['time'])
+            elif "T" in nc_clm.dimensions:
+                nt = len(nc_clm.dimensions['T'])
+            else:
+                msg = 'time dimension not found '
+                msg += 'in file:\n'
+                msg += fclm
+                raise ValueError(msg)
+            if 's_rho' in nc_clm.dimensions:
+                nz = len(nc_clm.dimensions['s_rho'])
+            elif 'depth' in nc_clm.dimensions:
+                nz = len(nc_clm.dimensions['depth'])
+            elif 'z' in nc_clm.dimensions:
+                nz = len(nc_clm.dimensions['z'])
+            else:
+                # Skip this clim file:
+                #msg = 'z dimension not found '
+                #msg += 'in file:\n'
+                #msg += f"{fclm}   ==> skipped"
+                #print(msg)
+                continue
             if 'eta_rho' in nc_clm.dimensions:
                 ny = len(nc_clm.dimensions['eta_rho'])
             elif 'y' in nc_clm.dimensions:
@@ -166,7 +188,7 @@ class PreProcessorBry:
                 if len(tmp)>=3:
                     outfile = fdir + '/' + tmp[:-2] + '_bry_' + tmp[-2] + '_' + tmp[-1]
                 else:
-                    outfile = fdir + '/' + 'bry_{:02}.nc'.format(fcnt)
+                    outfile = fdir + '/' + f'bry_{fcnt:02}.nc'
             fcnt += 1
             # Create output file:
             print("Create bry file: "+outfile)
@@ -191,15 +213,18 @@ class PreProcessorBry:
             nc.grd_file = self.grd_file
             import datetime
             now = datetime.datetime.today()
-            nc.date = 'Generated on {}'.format(now.strftime("%d-%b-%Y %H:%M"))
+            nc.date = f'Generated on {now.strftime("%d-%b-%Y %H:%M")}'
             # Add variables:
             directions = ['south', 'east', 'north', 'west']
-            for k in range(len(self.var_list)):
-                var = self.var_list[k]
+            for var in self.var_list:
+                if not var[0] in nc_clm.variables:
+                    # Go to next variable:
+                    continue
+                print(f"   add {var[0]}")
                 dims = ('bry_time',)
                 for i in range(4):
                     if self.obc[i] == 1:
-                        vname = '{}_{}'.format(var[0],directions[i])
+                        vname = f'{var[0]}_{directions[i]}'
                         if self.verbose:
                             print('  adding '+vname)
                         if 'z' in var[4]:
@@ -218,7 +243,7 @@ class PreProcessorBry:
                                 dims += ('eta_rho',)
                         missing_value = nc_clm.variables[var[0]].missing_value
                         v_new = nc.createVariable(vname, 'f4', dims, fill_value=np.float64(missing_value))
-                        lname = '{} {}ern boundary condition'.format(var[2],directions[i])
+                        lname = f'{var[2]} {directions[i]}ern boundary condition'
                         v_new.long_name = lname
                         v_new.units = var[3]
                         v_new.missing_value = np.float64(missing_value)
@@ -261,7 +286,7 @@ class PreProcessorBry:
                 #my_file.setncattr(var['name'], str(var['long_name'] + " := " + str(var['data'])))
                 my_file.setncattr(var['name'], var['data'])
 
-    def make_adjustments(self, file: str, out_variables: set, group_files: str, all_vars: set):
+    def make_adjustments(self, file: str, out_variables: set, group_index: int, group_files: str, all_vars: set):
         if self.verbose:
             print("Making adjustments to file contents as per adjustments.")
         for adjustment in self.adjustments:
@@ -273,7 +298,7 @@ class PreProcessorBry:
                     try:
                         if self.verbose:
                             print("Calling " + str(adjustment))
-                        adjustment['func'](file, group_files=group_files, options=self.options,
+                        adjustment['func'](file, group_files=group_files, group_index=group_index, options=self.options,
                                            adjustments=self.adjustments, **vars(self))
                     except TypeError as missingflag:
                         print("A flag necessary to run an adjustment was missing, so the adjustment was skipped.")

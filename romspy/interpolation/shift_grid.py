@@ -8,10 +8,10 @@ License: GNU GPL2+
 """
 
 
-def adjust_vectors(cdo, in_file, target_grid, variables, options, verbose=False, out_file=None) -> str:
+def adjust_vectors(cdo, in_file, target_grid, variables, options, verbose=True, out_file=None) -> str:
     """
     Shifts and rotates variable pairs
-    :param cdo:
+    :param cdo
     :param in_file:
     :param target_grid:
     :param variables:
@@ -75,7 +75,17 @@ def adjust_vectors(cdo, in_file, target_grid, variables, options, verbose=False,
                 _in.renameVariable(u, "tmp_" + u)
                 _in.renameVariable(v, "tmp_" + v)
 
-    t_name = cdo.merge(input=in_file + " " + temp_out_path, options=options)
+    #t_name = cdo.merge(input=in_file + " " + temp_out_path, options=options)
+    #if not os.path.exists(t_name):
+    if in_file != temp_out_path:
+        # Execute cdo command directly:
+        t_name = temp_out_path + "_2"
+        cmd = f"/usr/local/bin/cdo {options} -merge {in_file} {temp_out_path} {t_name}"
+        if verbose:
+            print(cmd)
+        os.system(cmd)
+    else:
+        t_name = in_file
     if out_file is not None:
         cdo.delname(",".join(["tmp_" + u + ",tmp_" + v for u, v in variables]), input=t_name, output=out_file,
                     options=options)
