@@ -20,7 +20,8 @@ def regrid_dfs_to_romsgrid(grd_file,out_dir,cdo_options,**kwargs):
     """
     # Check if output file exists: assume nothing needs to be done
     # if this is the case:
-    out_file = '{}/dfs_factors_roms.nc'.format(out_dir)
+    roms_setup = kwargs.get('ROMS_setup', 'pactcs30')
+    out_file = f'{out_dir}/{roms_setup}_dfs_factors_roms.nc'
     if os.path.exists(out_file):
         print('found DFS correction factors on ROMS grid: '+out_file)
         return out_file
@@ -75,7 +76,7 @@ def interpolate_clim_dfs_factors_to_daily(output_dir,infile,**kwargs):
     import scipy.interpolate
     roms_setup = kwargs.get('ROMS_setup', 'pactcs30')
     # Check if the file containing the daily factors is present already:
-    out_fname = '{}/{}_dfs_factors_roms_366_days.nc'.format(output_dir,roms_setup)
+    out_fname = f'{output_dir}/{roms_setup}_dfs_factors_roms_366_days.nc'
     # Return if this file already exists:
     if os.path.exists(out_fname):
         print('found file with daily DFS correction factors: '+out_fname)
@@ -83,7 +84,7 @@ def interpolate_clim_dfs_factors_to_daily(output_dir,infile,**kwargs):
     verbose = kwargs.get('verbose', False)
     if verbose:
         print('compute daily DFS correction factors from monthly')
-    vars = ['factor_dswr', 'factor_dlwr']
+    vlist = ['factor_dswr', 'factor_dlwr']
     molen = np.array([31,29,31,30,31,30,31,31,30,31,30,31])
     molen2 = np.zeros((13))
     molen2[1:] = molen
@@ -119,14 +120,14 @@ def interpolate_clim_dfs_factors_to_daily(output_dir,infile,**kwargs):
     # Global attributes:
     import datetime
     now = datetime.datetime.today()
-    nc_out.remark1 = 'Created using ROMSpy on {}'.format(now.strftime("%d-%b-%Y %H:%M"))
+    nc_out.remark1 = f'Created using ROMSpy on {now.strftime("%d-%b-%Y %H:%M")}'
     import subprocess
     result = subprocess.run(['git', 'rev-list', '--max-count=1', 'HEAD', 'HEAD'],
                             cwd=os.path.dirname(__file__), stdout=subprocess.PIPE)
     git_commit = result.stdout[:-1].decode('utf-8')
     nc_out.remark2 = 'ROMSpy commit: '+git_commit
     # Do the interpolations:
-    for var in vars:
+    for var in vlist:
         if verbose:
             print('   interpolate '+var+'...')
         nc_in = netCDF4.Dataset(infile,'r')
@@ -150,12 +151,17 @@ def create_era_frc_radiation(era_path,grd_file,weight_file,out_dir,year,month,
     :param era_path: path to ERA data files
     :param grd_file: path to ROMS grid file
     :param out_dir: output folder
+    :param year: year for which to create the data
+    :param month: month for which to create the data
+    :param timavg: time resolution. If the ERA5 input files are hourly, timavg determines
+       the time resolution of the output data in hours.
+    :param cdo_options: string of options passed to cdo
     Can have any of the following optional arguments:
         verbose - whether to print runtime information - default false
     """
     verbose = kwargs.get('verbose', False)
     if verbose:
-        print('create ERA5 radiation files for year {}, month {}'.format(year,month))
+        print(f'create ERA5 radiation files for year {year}, month {month}')
     lcdo = cdo.Cdo(debug=verbose)
     # read grid information:
     nc = netCDF4.Dataset(grd_file,'r')
@@ -167,11 +173,11 @@ def create_era_frc_radiation(era_path,grd_file,weight_file,out_dir,year,month,
     # Determine output file name:
     grdf = grd_file.split('/')[-1]
     roms_setup = grdf.split('_')[0]
-    out_fname = '{}/{}_ERA5_radiation_{}_{:02}.nc'.format(out_dir,roms_setup,year,month)
+    out_fname = f'{out_dir}/{roms_setup}_ERA5_radiation_{year}_{month:02}.nc'
     # Create output file, overwriting any existing file with the
     # same name:
     if verbose:
-        print('create ERA5 frc radiation file: {}'.format(out_fname))
+        print(f'create ERA5 frc radiation file: {out_fname}')
     nc_out = netCDF4.Dataset(out_fname,'w')
     nc_out.createDimension('xi_u', size=Lp-1)
     nc_out.createDimension('eta_u', size=Mp)
@@ -202,22 +208,22 @@ def create_era_frc_radiation(era_path,grd_file,weight_file,out_dir,year,month,
         if var == 'str':
             vobj_out = nc_out.variables['sthrad']
             vobj_out_time = nc_out.variables['sthr_time']
-            infile = '{0}/{1}/ERA5_{1}_{2:02}.nc'.format(era_path,year,month)
+            infile = f'{era_path}/{year}/ERA5_{year}_{month:02}.nc'
             if not os.path.exists(infile):
-                infile = '{0}/{1}/ERA5_{1}_{2:02}_daily.nc'.format(era_path,year,month)
+                infile = f'{era_path}/{year}/ERA5_{year}_{month:02}_daily.nc'
                 if not os.path.exists(infile):
                     msg = 'no ERA5 data found for variable "str" (surface net thermal radiation)'
                     raise ValueError(msg)
         else:
             vobj_out = nc_out.variables['dlwrad']
             vobj_out_time = nc_out.variables['dlw_time']
-            infile = '{0}/{1}/ERA5_{1}_{2:02}_strd.nc'.format(era_path,year,month)
+            infile = f'{era_path}/{year}/ERA5_{year}_{month:02}_strd.nc'
             if not os.path.exists(infile):
-                infile = '{0}/{1}/ERA5_{1}_{2:02}_strd_daily.nc'.format(era_path,year,month)
+                infile = f'{era_path}/{year}/ERA5_{year}_{month:02}_strd_daily.nc'
                 if not os.path.exists(infile):
                     msg = 'no ERA5 data found for variable "strd" (surface longwave downward radiation)'
                     raise ValueError(msg)
-        outfile = lcdo.remap(grd_file + ',' + weight_file, input=(' -selname,{}'.format(var) + ' ' + infile),
+        outfile = lcdo.remap(grd_file + ',' + weight_file, input=(f' -selname,{var}' + ' ' + infile),
                     options=cdo_options)
         # Scale variable in outfile:
         nc_in = netCDF4.Dataset(outfile, 'r')
@@ -236,15 +242,15 @@ def create_era_frc_radiation(era_path,grd_file,weight_file,out_dir,year,month,
             vobj_out_time.units = vobj_in_time.units
             stimei = 1/(24*3600.0)
         else:
-            msg = 'time unit of variable "{}" not supported: {}'.format(vobj_in_time.name,vobj_in_time.units)
+            msg = f'time unit of variable "{vobj_in_time.name}" not supported: {vobj_in_time.units}'
             raise ValueError(msg)
         # Average over time records and scale data:
         t1 = 0
         t2 = timavg
         tidx = 0
         while t2 <= nt:
-            if verbose:
-                print('   var = {}, t1 = {}, t2 = {}'.format(var,t1,t2))
+            #if verbose:
+            #    print(f'   var = {var}, t1 = {t1}, t2 = {t2}')
             vobj_out_time[tidx] = np.mean(vobj_in_time[t1:t2])/tscale
             vobj_out[tidx,:] = stimei*np.mean(nc_in.variables[var][t1:t2,:], axis=0)
             t1 = t2
@@ -252,7 +258,7 @@ def create_era_frc_radiation(era_path,grd_file,weight_file,out_dir,year,month,
             tidx += 1
         nc_in.close()
         # Remove temporary file produced by cdo:
-        os.system('rm -f {}'.format(outfile))
+        os.system(f'rm -f {outfile}')
     # Close output file:
     nc_out.close()
     if verbose:
@@ -272,6 +278,13 @@ def make_drakkar_correction(file,DFS_corr_factor_file,rad_file,month,tsteps_perd
     Can have any of the following optional arguments:
         verbose - whether to print runtime information - default false
     """
+    # Check first if the Drakkar correction can be done at all:
+    nc_frc = netCDF4.Dataset(file,'r')
+    if not ("swrad" in nc_frc.variables and "shflux" in nc_frc.variables):
+        print(f'   skip Drakkar correction: one or both of swrad and shflux not present in {file}')
+        nc_frc.close()
+        return
+    nc_frc.close()
     verbose = kwargs.get('verbose', False)
     if verbose:
         print('apply Drakkar correction to '+file)
@@ -291,8 +304,8 @@ def make_drakkar_correction(file,DFS_corr_factor_file,rad_file,month,tsteps_perd
         strd = nc_rad.variables['dlwrad'][t,:]
         shflux = nc_frc.variables['shflux'][t,:]
         t_dfs = t_dfs_ini + t//tsteps_perday
-        if verbose:
-            print('   t_ROMS_frc = {}, t_DFS = {}'.format(t,t_dfs))
+        #if verbose:
+        #    print(f'   t_ROMS_frc = {t}, t_DFS = {t_dfs}')
         factor_swrad = nc_corr_fac['factor_dswr'][t_dfs,:]
         factor_dlwrad = nc_corr_fac['factor_dlwr'][t_dfs,:]
         # Do the correction:

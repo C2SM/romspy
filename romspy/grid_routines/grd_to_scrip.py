@@ -11,7 +11,7 @@ License: GNU GPL2+
 
 
 # TODO: Investigate bugged con
-def from_nc(filepath: str) -> str:
+def from_nc(filepath: str, outdir:str) -> str:
     """
     Make a SCRIP grid file from a grid file
     :param filepath: grid file
@@ -22,9 +22,9 @@ def from_nc(filepath: str) -> str:
     lat = given_grid.variables['lat_rho'][:]
     mask = given_grid.variables['mask_rho'][:]
     path = os.path.split(filepath)
-    if not os.path.isdir(os.path.join(path[0], "scrip_grid")):
-        os.mkdir(os.path.join(path[0], "scrip_grid"))
-    out_string = os.path.join(path[0], "scrip_grid", 'scrip_' + path[1])
+    if not os.path.isdir(outdir+"/scrip_grid"):
+        os.mkdir(outdir+"/scrip_grid")
+    out_string = os.path.join(outdir, "scrip_grid", 'scrip_' + path[1])
     title = filepath
     given_grid.close()
 

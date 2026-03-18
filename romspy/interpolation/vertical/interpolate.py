@@ -136,7 +136,17 @@ def apply_vert_weights(cdo, apply_fun, weight_file: str, file: str, outfile: str
                 in_file.renameVariable(var, "tmp_" + var)
     # Merge into dataset
     # doesn not work CDO limitations! cdo.replace(input=file + " " + temp_out_path, output=outfile, options=options)
-    temp_merge = cdo.merge(input=file + " " + temp_out_path, options=options)
+    #temp_merge = cdo.merge(input=file + " " + temp_out_path, options=options)
+    #if not os.path.exists(temp_merge):
+    if file != temp_out_path:
+        # Execute cdo command directly:
+        temp_merge = temp_out_path + "_2"
+        cmd = f"/usr/local/bin/cdo {options} -merge {file} {temp_out_path} {temp_merge}"
+        if verbose:
+            print(cmd)
+        os.system(cmd)
+    else:
+        temp_merge = file
     if outfile is not None:
         cdo.delname(",".join(["tmp_" + var for var in variables]), input=temp_merge, output=outfile, options=options)
     else:

@@ -1,7 +1,10 @@
 from romspy.interpolation.vertical.levels import z_levels, sigma_stretch_cs, sigma_stretch_sc
 from romspy.interpolation.shift_grid import shift
+from romspy.adjustments import chl_to_depth
+from romspy.adjustments import biology_params
 import netCDF4
 import numpy as np
+import sys
 
 """
 Author: Nicolas Munnich
@@ -10,30 +13,29 @@ License: GNU GPL2+
 
 
 def uv_bar_adjustment(file: str, group_files: str, target_grid, verbose, h, layers, theta_s, theta_b, sigma_type, hc,
-                      zeta, obc,
-                      **kwargs):
+                      zeta, obc, **kwargs):
     if verbose:
         print("Getting ubar and vbar")
     h = h
     sc = sigma_stretch_sc(layers, False)
     cs = sigma_stretch_cs(theta_s, theta_b, sc, sigma_type)
     hc = hc
-    zeta = zeta
+    zeta = zeta                 
     delta_z_levs_u = z_levels(shift(h, 1), sc, cs, hc, shift(zeta, 1), sigma_type=3, verbose=verbose)
     delta_z_levs_u = delta_z_levs_u[1:] - delta_z_levs_u[:-1]
     delta_z_levs_u_inv = 1 / sum(delta_z_levs_u)
     delta_z_levs_v = z_levels(shift(h, 2), sc, cs, hc, shift(zeta, 2), sigma_type=3, verbose=verbose)
     delta_z_levs_v = delta_z_levs_v[1:] - delta_z_levs_v[:-1]
     delta_z_levs_v_inv = 1 / sum(delta_z_levs_v)
-    my_file: netCDF4.Dataset
-    with netCDF4.Dataset(file, mode='r+') as my_file:
-        time_len = len(my_file.dimensions["time"])
-        u: netCDF4.Variable = my_file.variables["u"]
-        v: netCDF4.Variable = my_file.variables["v"]
+    clm_file: netCDF4.Dataset
+    with netCDF4.Dataset(file, mode='r+') as clm_file:
+        time_len = len(clm_file.dimensions["time"])
+        u: netCDF4.Variable = clm_file.variables["u"]
+        v: netCDF4.Variable = clm_file.variables["v"]
         ubar_dims = (u.dimensions[0], u.dimensions[2], u.dimensions[3])
         vbar_dims = (v.dimensions[0], v.dimensions[2], v.dimensions[3])
-        ubar: netCDF4.Variable = my_file.createVariable('ubar', 'f', ubar_dims)
-        vbar: netCDF4.Variable = my_file.createVariable('vbar', 'f', vbar_dims)
+        ubar: netCDF4.Variable = clm_file.createVariable('ubar', 'f', ubar_dims)
+        vbar: netCDF4.Variable = clm_file.createVariable('vbar', 'f', vbar_dims)
         u.setncattr('long_name', "u-velocity component")
         v.setncattr('long_name', "v-velocity component")
         ubar_attrs = {x: u.getncattr(x) for x in u.ncattrs() if x != "_FillValue"}
@@ -59,7 +61,7 @@ def uv_bar_adjustment(file: str, group_files: str, target_grid, verbose, h, laye
 
 def get_obcvolcons(ubar, vbar, pm, pn, rmask, obc, verbose):
     """
-    Enforce integral flux conservation around the domain
+    Enforce integral flux conservation around the domain (called by uv_bar_adjustment)
     :param ubar: u averaged over depth
     :param vbar: v averaged over depth
     :param pm: curvilinear coordinate metric in xi
@@ -98,7 +100,82 @@ def get_obcvolcons(ubar, vbar, pm, pn, rmask, obc, verbose):
     return ubar, vbar
 
 
+def chl_adjustment(file: str, **kwargs):
+    CHLAmin = biology_params.CHLAmin
+    num_layers = kwargs['layers']
+    theta_s = kwargs['theta_s']
+    theta_b = kwargs['theta_b']
+    zroms = kwargs["z_level_rho"]
+    hc = kwargs['hc']
+    sigma_type = kwargs['sigma_type']
+    h = kwargs['h']
+    verbose = kwargs['verbose']
+    if verbose:
+        print("create SPCHL, DIATCHL, DIATCHL in file: "+file)
+    clm_file: netCDF4.Dataset
+    with netCDF4.Dataset(file, mode='r+') as clm_file:
+        # Find name of time dimension:
+        if "time" in clm_file.dimensions:
+            tdim = "time"
+        elif "T" in clm_file.dimensions:
+            tdim = "T"
+        else:
+            msg = f"no time dimension found in file: {file}"
+            raise ValueError(msg)
+        time_len = len(clm_file.dimensions[tdim])
+        # Make sure output file contains depth dimension:
+        if not "depth" in clm_file.dimensions:
+            clm_file.createDimension("depth", num_layers)
+        tot_chl_surf: netCDF4.Variable = clm_file.variables["TOT_CHL_SURF"]  # shape: tyx
+        if 'SPCHL' in clm_file.variables:
+            spchl = clm_file.variables['SPCHL']
+        else:
+            spchl: netCDF4.Variable = clm_file.createVariable('SPCHL', 'f4', (tdim,'depth','y','x'),
+                                                         fill_value=tot_chl_surf._FillValue)
+        if 'DIATCHL' in clm_file.variables:
+            diatchl = clm_file.variables['DIATCHL']
+        else:
+            diatchl: netCDF4.Variable = clm_file.createVariable('DIATCHL', 'f4', (tdim,'depth','y','x'),
+                                                        fill_value=tot_chl_surf._FillValue)
+        if 'DIAZCHL' in clm_file.variables:
+            diazchl = clm_file.variables['DIAZCHL']
+        else:
+            diazchl: netCDF4.Variable = clm_file.createVariable('DIAZCHL', 'f4', (tdim,'depth','y','x'),
+                                                           fill_value=tot_chl_surf._FillValue)
+        spchl.setncattr('long_name', "Small phytoplankton chlorophyll")
+        spchl.setncattr('units', "mg Chl-a m-3")
+        spchl.setncattr('missing_value', tot_chl_surf._FillValue)
+        diatchl.setncattr('long_name', "Diatom chlorophyll")
+        diatchl.setncattr('units', "mg Chl-a m-3")
+        diatchl.setncattr('missing_value', tot_chl_surf._FillValue)
+        diazchl.setncattr('long_name', "Diazotroph chlorophyll")
+        diazchl.setncattr('units', "mg Chl-a m-3")
+        diazchl.setncattr('missing_value', tot_chl_surf._FillValue)
+        # Extrapolate total Chl to depth:
+        # sc = sigma_stretch_sc(num_layers)
+        # cs = sigma_stretch_cs(theta_s, theta_b, sc, sigma_type)
+        # zroms = z_levels(h, sc, cs, hc)
+        for t in range(time_len):
+            if t == 0:
+                mstr = f"   t = {t+1}/{time_len}"
+            else:
+                mstr = '\b'*mstr_len + f"   t = {t+1}/{time_len}"
+            print(mstr, end='')
+            sys.stdout.flush()
+            mstr_len = len(mstr)
+            tot_chl = chl_to_depth.run(tot_chl_surf[t,...].data,zroms.data)
+            tot_chl[tot_chl<CHLAmin] = CHLAmin
+            # Write data to clm file:
+            spchl[t,...] = biology_params.CHL_SP_RATIO * tot_chl
+            diatchl[t,...] = biology_params.CHL_DIAT_RATIO * tot_chl
+            diazchl[t,...] = biology_params.CHL_DIAZ_RATIO * tot_chl
+        print('')
+
+
+# Collect all adjustments needed for clim files:
 clim_adjustments = [
     {'out_var_names': {'ubar', 'vbar'}, 'in_var_names': {'u', 'v'},
-     'func': uv_bar_adjustment}
+     'func': uv_bar_adjustment},
+    {'out_var_names': {'SPCHL', 'DIATCHL', 'DIAZCHL'}, 'in_var_names': {'TOT_CHL_SURF'},
+     'func': chl_adjustment},
 ]
